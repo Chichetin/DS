@@ -1,0 +1,45 @@
+# Python venv (создаётся командой `python -m venv .` в корне)
+Scripts/
+Lib/
+bin/
+include/
+etc/
+share/
+pyvenv.cfg
+CACHEDIR.TAG
+.Python
+
+# Python артефакты
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Данные (raw + промежуточные ~30+ ГБ, восстанавливаются прогоном пайплайна)
+data/
+catboost_info/
+*.parquet
+*.csv
+!src/**/*.csv
+
+# Архив раздачи (14.9 ГБ)
+ITMO_Avito_Hackathon.zip
+*.zip
+
+# Артефакты обучения (логи, модели, метрики, предсказания — генерируются скриптами)
+artifacts/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code локальное состояние
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
