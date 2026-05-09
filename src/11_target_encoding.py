@@ -20,10 +20,11 @@ GLOBAL_MEAN ≈ 0.0456 (target rate в full train, см. project_eda_findings.md
   te_city_snapshot.parquet
 """
 from __future__ import annotations
-import time
 from pathlib import Path
 
 import duckdb
+
+from _log import Logger
 
 ROOT = Path(__file__).resolve().parent.parent
 CLEAN = ROOT / "data" / "clean"
@@ -31,16 +32,11 @@ OUT = ROOT / "data" / "features"
 ART = ROOT / "artifacts" / "features"
 OUT.mkdir(parents=True, exist_ok=True)
 ART.mkdir(parents=True, exist_ok=True)
-LOG = ART / "te.log"
 
 GLOBAL_MEAN = 0.0456
 ALPHA = 100.0
 
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / "te.log")
 
 
 def build(con: duckdb.DuckDBPyConnection,
@@ -48,8 +44,7 @@ def build(con: duckdb.DuckDBPyConnection,
           source_sql: str,
           key_col: str) -> None:
     """source_sql даёт (k, d, is_return) на полном train. Строит TE daily + snapshot."""
-    log("=" * 60)
-    log(f"TE: {short} (key_col={key_col})")
+    log.step(f"TE: {short} (key_col={key_col})")
 
     daily_out = OUT / f"te_{short}_daily.parquet"
     snap_out = OUT / f"te_{short}_snapshot.parquet"
@@ -110,7 +105,6 @@ def build(con: duckdb.DuckDBPyConnection,
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"Target encoding start. duckdb={duckdb.__version__}")
     log(f"  GLOBAL_MEAN={GLOBAL_MEAN}, ALPHA={ALPHA}")
 
@@ -149,8 +143,7 @@ def main() -> None:
         f.unlink(missing_ok=True)
     tmp_dir.rmdir()
 
-    log("=" * 60)
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
@@ -159,7 +152,5 @@ if __name__ == "__main__":
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "te_crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "te_crash.log")
         raise

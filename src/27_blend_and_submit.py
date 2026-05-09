@@ -16,7 +16,6 @@
 """
 from __future__ import annotations
 import argparse
-import time
 from pathlib import Path
 
 import numpy as np
@@ -27,16 +26,16 @@ from sklearn.metrics import (
     precision_score, recall_score,
 )
 
+from _log import Logger
+
 ROOT = Path(__file__).resolve().parent.parent
 ART = ROOT / "artifacts" / "submission"
 ART.mkdir(parents=True, exist_ok=True)
 
-LOG_FILE: Path = ART / "_default.log"
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG_FILE.write_text("\n".join(_lines), encoding="utf-8")
+# Логгер пересоздаётся в main() после парсинга --name (run.log в out_dir).
+# До этого момента используем default-файл, чтобы любой сбой при парсинге аргов
+# тоже попал в лог.
+log = Logger(ART / "_default.log")
 
 
 def best_f1(y: np.ndarray, p: np.ndarray) -> tuple[float, float, float]:
@@ -57,18 +56,16 @@ def main() -> None:
 
     out_dir = ART / args.name
     out_dir.mkdir(parents=True, exist_ok=True)
-    global LOG_FILE
-    LOG_FILE = out_dir / "run.log"
-    _lines.clear()
+    # Переключаемся на «настоящий» лог в out_dir/run.log.
+    global log
+    log = Logger(out_dir / "run.log")
 
-    t0 = time.time()
     log(f"Final submission build. team={args.team!r}")
     log(f"  lgbm dir: {args.lgbm}")
     log(f"  cat dir:  {args.cat}")
 
     # 1. Load holdout predictions ----------------------------------------------
-    log("=" * 60)
-    log("Step 1/4: load holdout predictions")
+    log.step("Step 1/4: load holdout predictions")
     h_l = pl.read_parquet(Path(args.lgbm) / "holdout_predictions.parquet").to_pandas()
     h_c = pl.read_parquet(Path(args.cat) / "holdout_predictions.parquet").to_pandas()
     log(f"  lgbm holdout: {len(h_l):,} rows")
@@ -87,8 +84,7 @@ def main() -> None:
     y = h["is_return"].astype(np.int8).values
 
     # 2. Search alpha ----------------------------------------------------------
-    log("=" * 60)
-    log("Step 2/4: alpha sweep (по F1 на holdout)")
+    log.step("Step 2/4: alpha sweep (по F1 на holdout)")
     auc_l, thr_l, f1_l = best_f1(y, h["p_lgbm"].values)
     auc_c, thr_c, f1_c = best_f1(y, h["p_cat"].values)
     log(f"  LGBM  alone:    AUC={auc_l:.5f}  F1={f1_l:.5f} @ thr {thr_l:.4f}")
@@ -104,7 +100,6 @@ def main() -> None:
             marker = "  ← best F1"
         log(f"  alpha={alpha:.2f}  AUC={auc:.5f}  F1={f1:.5f} @ thr {thr:.4f}{marker}")
 
-    log("=" * 60)
     log(f"  → best alpha={best_alpha:.2f}  AUC={best_auc:.5f}  F1={best_f1_:.5f} @ thr {best_thr:.4f}")
 
     p_blend = best_alpha * h["p_lgbm"].values + (1 - best_alpha) * h["p_cat"].values
@@ -116,8 +111,7 @@ def main() -> None:
     log(f"  CM: TN={cm[0,0]:,} FP={cm[0,1]:,} FN={cm[1,0]:,} TP={cm[1,1]:,}")
 
     # 3. Apply to test ---------------------------------------------------------
-    log("=" * 60)
-    log("Step 3/4: blend test predictions")
+    log.step("Step 3/4: blend test predictions")
     t_l = pl.read_parquet(Path(args.lgbm) / "predictions.parquet").to_pandas()
     t_c = pl.read_parquet(Path(args.cat) / "predictions.parquet").to_pandas()
     log(f"  lgbm test: {len(t_l):,} rows")
@@ -136,8 +130,7 @@ def main() -> None:
     log(f"  test pos: {pred_test.sum():,} ({pos_rate:.4%})")
 
     # 4. Sanity + write submission ---------------------------------------------
-    log("=" * 60)
-    log("Step 4/4: sanity + write submission CSV")
+    log.step("Step 4/4: sanity + write submission CSV")
 
     # Sanity: target rate в холдауте
     holdout_rate = float(y.mean())
@@ -194,7 +187,9 @@ def main() -> None:
     (out_dir / "metrics.txt").write_text(metrics, encoding="utf-8")
     log(f"  → {out_dir/'metrics.txt'}")
 
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
+    # stdout-summary специально оставлен — этот скрипт почти всегда запускается
+    # в foreground, чтобы оператор сразу увидел итоговые цифры перед сдачей.
     print(f"\n=== SUBMISSION READY ===")
     print(f"  alpha={best_alpha:.2f}, thr={best_thr:.4f}")
     print(f"  holdout AUC={best_auc:.5f}, F1={best_f1_:.5f}")
@@ -207,7 +202,5 @@ if __name__ == "__main__":
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "submission_crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "submission_crash.log")
         raise

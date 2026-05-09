@@ -20,39 +20,33 @@
    - sink → c4_*.parquet
 """
 from __future__ import annotations
-import time
+import os
 from pathlib import Path
 
 import duckdb
 import polars as pl
 
-import os
+from _log import Logger
 
 ROOT = Path(__file__).resolve().parent.parent
 CLEAN = ROOT / "data" / "clean"
 FEAT = ROOT / "data" / "features"
 ART = ROOT / "artifacts" / "features"
+ART.mkdir(parents=True, exist_ok=True)
 
 SUFFIX = os.environ.get("SUFFIX", "")
 SAMPLE_PATH = os.environ.get("SAMPLE_PATH", "orders_train_sample.parquet")
 TARGETS = set(os.environ.get("TARGETS", "train,holdout,test").split(","))
 
-LOG = ART / f"c4{SUFFIX}.log"
-
 GLOBAL_MEAN = 0.0456
 
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / f"c4{SUFFIX}.log")
 
 
 def build_microcat_price_stats() -> Path:
     """Snapshot median/mean order_price per microcat_name (через items)."""
     out = FEAT / "microcat_price_stats.parquet"
-    log("=" * 60)
-    log(f"Build microcat_price_stats → {out.name}")
+    log.step(f"Build microcat_price_stats → {out.name}")
 
     tmp_dir = ART / "duckdb_tmp_microcat_price"
     tmp_dir.mkdir(exist_ok=True)
@@ -149,7 +143,6 @@ def add_c4_features(c3_lf: pl.LazyFrame, orders_src: Path, is_test: bool) -> pl.
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"C4 features start. polars={pl.__version__}, duckdb={duckdb.__version__}")
 
     if not (FEAT / "microcat_price_stats.parquet").exists():
@@ -168,8 +161,7 @@ def main() -> None:
         if name not in TARGETS:
             continue
         out_suffix = "" if is_test else SUFFIX
-        log("=" * 60)
-        log(f"Build c4_{name}{out_suffix} from {c3_src.name}")
+        log.step(f"Build c4_{name}{out_suffix} from {c3_src.name}")
         c3_lf = pl.scan_parquet(c3_src)
         c4_lf = add_c4_features(c3_lf, orders_src, is_test)
         out = FEAT / f"c4_{name}{out_suffix}.parquet"
@@ -179,8 +171,7 @@ def main() -> None:
         log(f"  c4_{name}{out_suffix}: {n:,} rows")
 
     if "train" in TARGETS:
-        log("=" * 60)
-        log(f"Final schema (c4_train{SUFFIX}) — new columns vs c3:")
+        log.step(f"Final schema (c4_train{SUFFIX}) — new columns vs c3:")
         schema = pl.scan_parquet(FEAT / f"c4_train{SUFFIX}.parquet").collect_schema()
         new_cols = [
             "seller_te", "seller_te_count",
@@ -194,16 +185,13 @@ def main() -> None:
             if n_ in new_cols:
                 log(f"  {n_}: {dt}")
 
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
-    import os
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "c4_crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "c4_crash.log")
         raise

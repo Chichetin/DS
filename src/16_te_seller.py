@@ -9,10 +9,11 @@
   te_seller_snapshot.parquet  — (seller_id) → seller_te, count на конец train
 """
 from __future__ import annotations
-import time
 from pathlib import Path
 
 import duckdb
+
+from _log import Logger
 
 ROOT = Path(__file__).resolve().parent.parent
 CLEAN = ROOT / "data" / "clean"
@@ -20,20 +21,14 @@ OUT = ROOT / "data" / "features"
 ART = ROOT / "artifacts" / "features"
 OUT.mkdir(parents=True, exist_ok=True)
 ART.mkdir(parents=True, exist_ok=True)
-LOG = ART / "te_seller.log"
 
 GLOBAL_MEAN = 0.0456
 ALPHA = 100.0
 
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / "te_seller.log")
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"TE seller start. duckdb={duckdb.__version__}")
     log(f"  GLOBAL_MEAN={GLOBAL_MEAN}, ALPHA={ALPHA}")
 
@@ -49,8 +44,7 @@ def main() -> None:
     daily_out = OUT / "te_seller_daily.parquet"
     snap_out = OUT / "te_seller_snapshot.parquet"
 
-    log("=" * 60)
-    log(f"  build daily → {daily_out.name}")
+    log.step(f"build daily → {daily_out.name}")
     con.execute(
         f"""
         COPY (
@@ -88,7 +82,7 @@ def main() -> None:
     n_daily = con.execute(f"SELECT COUNT(*) FROM read_parquet('{daily_out.as_posix()}')").fetchone()[0]
     log(f"  daily rows: {n_daily:,}")
 
-    log(f"  build snapshot → {snap_out.name}")
+    log.step(f"build snapshot → {snap_out.name}")
     con.execute(
         f"""
         COPY (
@@ -111,8 +105,7 @@ def main() -> None:
         f.unlink(missing_ok=True)
     tmp_dir.rmdir()
 
-    log("=" * 60)
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
@@ -121,7 +114,5 @@ if __name__ == "__main__":
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "te_seller_crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "te_seller_crash.log")
         raise
