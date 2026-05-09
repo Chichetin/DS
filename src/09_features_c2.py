@@ -14,29 +14,24 @@
 Стратегия: всё через polars LazyFrame + sink_parquet (стримим, не валим память).
 """
 from __future__ import annotations
-import time
+import os
 from pathlib import Path
 
 import polars as pl
 
-import os
+from _log import Logger
 
 ROOT = Path(__file__).resolve().parent.parent
 CLEAN = ROOT / "data" / "clean"
 FEAT = ROOT / "data" / "features"
 ART = ROOT / "artifacts" / "features"
+ART.mkdir(parents=True, exist_ok=True)
 
 SUFFIX = os.environ.get("SUFFIX", "")
 SAMPLE_PATH = os.environ.get("SAMPLE_PATH", "orders_train_sample.parquet")
 TARGETS = set(os.environ.get("TARGETS", "train,holdout,test").split(","))
 
-LOG = ART / f"c2{SUFFIX}.log"
-
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / f"c2{SUFFIX}.log")
 
 
 ENTITIES = ["buyer", "seller", "item"]
@@ -126,7 +121,6 @@ def add_history_features(
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"C2 features start. polars={pl.__version__}")
 
     sample_full = CLEAN / SAMPLE_PATH
@@ -139,8 +133,7 @@ def main() -> None:
     for name, c1_src, orders_src, is_test in targets_all:
         if name not in TARGETS:
             continue
-        log("=" * 60)
-        log(f"Build c2_{name}{SUFFIX} from {c1_src.name}")
+        log.step(f"Build c2_{name}{SUFFIX} from {c1_src.name}")
         c1_lf = pl.scan_parquet(c1_src)
         c2_lf = add_history_features(c1_lf, orders_src, is_test)
         # test без суффикса (одинаковый для всех)
@@ -153,22 +146,18 @@ def main() -> None:
 
     # Schema dump
     if "train" in TARGETS:
-        log("=" * 60)
-        log(f"Final schema (c2_train{SUFFIX}):")
+        log.step(f"Final schema (c2_train{SUFFIX}):")
         schema = pl.scan_parquet(FEAT / f"c2_train{SUFFIX}.parquet").collect_schema()
         for n, dt in zip(schema.names(), schema.dtypes()):
             log(f"  {n}: {dt}")
 
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
-    import os
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "c2_crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "c2_crash.log")
         raise

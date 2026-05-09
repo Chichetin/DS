@@ -22,10 +22,11 @@ Test snapshot: для каждой сущности — счётчики по в
 "что было известно на старте test-периода".
 """
 from __future__ import annotations
-import time
 from pathlib import Path
 
 import duckdb
+
+from _log import Logger
 
 ROOT = Path(__file__).resolve().parent.parent
 CLEAN = ROOT / "data" / "clean"
@@ -33,13 +34,8 @@ OUT = ROOT / "data" / "features"
 ART = ROOT / "artifacts" / "features"
 OUT.mkdir(parents=True, exist_ok=True)
 ART.mkdir(parents=True, exist_ok=True)
-LOG = ART / "history.log"
 
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / "history.log")
 
 
 ENTITIES = [
@@ -51,8 +47,7 @@ ENTITIES = [
 
 def build_for_entity(con: duckdb.DuckDBPyConnection, key_col: str, short: str) -> None:
     """Строит daily и snapshot parquet для одной сущности."""
-    log("=" * 60)
-    log(f"Entity: {key_col}")
+    log.step(f"Entity: {key_col}")
 
     daily_out = OUT / f"hist_{short}_daily.parquet"
     snap_out = OUT / f"hist_{short}_snapshot.parquet"
@@ -144,7 +139,6 @@ def build_for_entity(con: duckdb.DuckDBPyConnection, key_col: str, short: str) -
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"History aggregates start. duckdb={duckdb.__version__}")
 
     tmp_dir = ART / "duckdb_tmp_history"
@@ -164,8 +158,7 @@ def main() -> None:
         f.unlink(missing_ok=True)
     tmp_dir.rmdir()
 
-    log("=" * 60)
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
@@ -174,7 +167,5 @@ if __name__ == "__main__":
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "history_crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "history_crash.log")
         raise

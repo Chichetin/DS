@@ -16,13 +16,13 @@
 Стратегия: один pipeline-builder, применяется к sample и test одинаково (фичи симметричны).
 """
 from __future__ import annotations
-import time
+import os
 from datetime import date
 from pathlib import Path
 
 import polars as pl
 
-import os
+from _log import Logger
 
 ROOT = Path(__file__).resolve().parent.parent
 CLEAN = ROOT / "data" / "clean"
@@ -36,16 +36,10 @@ SUFFIX = os.environ.get("SUFFIX", "")
 SAMPLE_PATH = os.environ.get("SAMPLE_PATH", "orders_train_sample.parquet")
 TARGETS = set(os.environ.get("TARGETS", "train,holdout,test").split(","))
 
-LOG_FILE = ART / f"c1{SUFFIX}.log"
-
 HOLDOUT_START = date(2025, 9, 21)
 HOLDOUT_END = date(2025, 9, 30)
 
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG_FILE.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / f"c1{SUFFIX}.log")
 
 
 def load_lookups() -> tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame, pl.LazyFrame]:
@@ -153,13 +147,11 @@ def build_features(orders_lf: pl.LazyFrame, has_target: bool) -> pl.LazyFrame:
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"C1 features start. polars={pl.__version__}, SUFFIX={SUFFIX!r}, SAMPLE_PATH={SAMPLE_PATH}, TARGETS={TARGETS}")
 
     # 1. Sample → train + holdout (по env var)
     if {"train", "holdout"} & TARGETS:
-        log("=" * 60)
-        log(f"Step 1/2: {SAMPLE_PATH} → train + holdout (time-based split)")
+        log.step(f"Step 1/2: {SAMPLE_PATH} → train + holdout (time-based split)")
         sample_feats = build_features(
             pl.scan_parquet(CLEAN / SAMPLE_PATH),
             has_target=True,
@@ -188,8 +180,7 @@ def main() -> None:
 
     # 2. Test
     if "test" in TARGETS:
-        log("=" * 60)
-        log("Step 2/2: orders_test → c1_test")
+        log.step("Step 2/2: orders_test → c1_test")
         test_feats = build_features(
             pl.scan_parquet(CLEAN / "orders_test.parquet"),
             has_target=False,
@@ -202,20 +193,17 @@ def main() -> None:
 
     # 3. Schema dump для отчёта (только если строили train)
     if "train" in TARGETS:
-        log("=" * 60)
-        log("Final schema (c1_train):")
+        log.step("Final schema (c1_train):")
         schema = pl.scan_parquet(OUT / f"c1_train{SUFFIX}.parquet").collect_schema()
         for name, dt in zip(schema.names(), schema.dtypes()):
             log(f"  {name}: {dt}")
 
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "c1_crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "c1_crash.log")
         raise

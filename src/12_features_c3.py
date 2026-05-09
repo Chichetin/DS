@@ -9,29 +9,24 @@
 5. Сохраняем c3_{train,holdout,test}.parquet.
 """
 from __future__ import annotations
-import time
+import os
 from pathlib import Path
 
 import polars as pl
 
-import os
+from _log import Logger
 
 ROOT = Path(__file__).resolve().parent.parent
 FEAT = ROOT / "data" / "features"
 ART = ROOT / "artifacts" / "features"
+ART.mkdir(parents=True, exist_ok=True)
 
 SUFFIX = os.environ.get("SUFFIX", "")
 TARGETS = set(os.environ.get("TARGETS", "train,holdout,test").split(","))
 
-LOG = ART / f"c3{SUFFIX}.log"
-
 GLOBAL_MEAN = 0.0456
 
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / f"c3{SUFFIX}.log")
 
 
 TE_KEYS = [
@@ -61,7 +56,6 @@ def add_te(c2_lf: pl.LazyFrame, is_test: bool) -> pl.LazyFrame:
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"C3 features start. polars={pl.__version__}")
 
     targets_all = [
@@ -74,8 +68,7 @@ def main() -> None:
         if name not in TARGETS:
             continue
         out_suffix = "" if is_test else SUFFIX
-        log("=" * 60)
-        log(f"Build c3_{name}{out_suffix} from {c2_src.name}")
+        log.step(f"Build c3_{name}{out_suffix} from {c2_src.name}")
         c2_lf = pl.scan_parquet(c2_src)
         c3_lf = add_te(c2_lf, is_test)
         out = FEAT / f"c3_{name}{out_suffix}.parquet"
@@ -85,23 +78,19 @@ def main() -> None:
         log(f"  c3_{name}{out_suffix}: {n:,} rows")
 
     if "train" in TARGETS:
-        log("=" * 60)
-        log(f"Final schema (c3_train{SUFFIX}) — new TE columns:")
+        log.step(f"Final schema (c3_train{SUFFIX}) — new TE columns:")
         schema = pl.scan_parquet(FEAT / f"c3_train{SUFFIX}.parquet").collect_schema()
         for n, dt in zip(schema.names(), schema.dtypes()):
             if "_te" in n:
                 log(f"  {n}: {dt}")
 
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
-    import os
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "c3_crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "c3_crash.log")
         raise

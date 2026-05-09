@@ -25,11 +25,12 @@ from sklearn.metrics import (
     precision_score, recall_score,
 )
 
+from _log import Logger
+
 ROOT = Path(__file__).resolve().parent.parent
 FEAT = ROOT / "data" / "features"
 ART = ROOT / "artifacts" / "lgbm_full"
 ART.mkdir(parents=True, exist_ok=True)
-LOG_FILE = ART / "run.log"
 
 CAT_COLS = [
     "delivery_service", "platform_id", "city", "category_name",
@@ -58,11 +59,7 @@ TRAIN_PATH = FEAT / "c4_train_full.parquet"
 HOLDOUT_PATH = FEAT / "c4_holdout_full.parquet"
 TEST_PATH = FEAT / "c4_test.parquet"
 
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG_FILE.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / "run.log")
 
 
 def downcast_lazy(lf: pl.LazyFrame, skip: set[str]) -> pl.LazyFrame:
@@ -164,18 +161,15 @@ def load_compact(path: Path, name: str, cat_mappings: dict[str, list]) -> pd.Dat
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"LGBM FULL. lightgbm={lgb.__version__}, polars={pl.__version__}")
     log(f"  train: {TRAIN_PATH}")
     log(f"  holdout: {HOLDOUT_PATH}")
     log(f"  test: {TEST_PATH}")
 
-    log("=" * 60)
-    log("Step 1/5: precompute cat mappings (lazy scan через polars)")
+    log.step("Step 1/5: precompute cat mappings (lazy scan через polars)")
     cat_mappings = precompute_cat_mappings([TRAIN_PATH, HOLDOUT_PATH, TEST_PATH])
 
-    log("=" * 60)
-    log("Step 2/5: load (Float32 downcast + cat encoding)")
+    log.step("Step 2/5: load (Float32 downcast + cat encoding)")
     train = load_compact(TRAIN_PATH, "train", cat_mappings)
     holdout = load_compact(HOLDOUT_PATH, "holdout", cat_mappings)
     # test загружаем ПОСЛЕ тренировки, чтобы не держать в памяти зря
@@ -185,8 +179,7 @@ def main() -> None:
     X_train, y_train = train[feature_cols], train[TARGET].astype(np.int8).values
     X_hold, y_hold = holdout[feature_cols], holdout[TARGET].astype(np.int8).values
 
-    log("=" * 60)
-    log("Step 3/5: fit LGBM")
+    log.step("Step 3/5: fit LGBM")
     log(f"  params: {PARAMS}")
     model = lgb.LGBMClassifier(**PARAMS)
     model.fit(
@@ -208,8 +201,7 @@ def main() -> None:
     gc.collect()
     log("  freed train memory")
 
-    log("=" * 60)
-    log("Step 4/5: holdout metrics")
+    log.step("Step 4/5: holdout metrics")
     p_hold = model.predict_proba(X_hold, num_iteration=best_iter)[:, 1]
     auc = roc_auc_score(y_hold, p_hold)
     precs, recs, thrs = precision_recall_curve(y_hold, p_hold)
@@ -239,8 +231,7 @@ def main() -> None:
     for _, r in imp.head(20).iterrows():
         log(f"    {r['feature']:35s} gain={r['gain']:.0f}  split={r['split']}")
 
-    log("=" * 60)
-    log("Step 5/5: test predictions (load test now)")
+    log.step("Step 5/5: test predictions (load test now)")
     test = load_compact(TEST_PATH, "test", cat_mappings)
     test_ids = test[ID_COLS].copy()
     X_test = test[feature_cols]
@@ -287,8 +278,7 @@ def main() -> None:
     (ART / "metrics.txt").write_text(metrics_txt, encoding="utf-8")
     log(f"  → {ART / 'metrics.txt'}")
 
-    log("=" * 60)
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
@@ -297,7 +287,5 @@ if __name__ == "__main__":
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "crash.log")
         raise

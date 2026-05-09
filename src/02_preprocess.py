@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 from datetime import date
 from pathlib import Path
 
 import polars as pl
+
+from _log import Logger
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -25,31 +26,18 @@ CLEAN = ROOT / "data" / "clean"
 ART = ROOT / "artifacts" / "preprocess"
 CLEAN.mkdir(parents=True, exist_ok=True)
 ART.mkdir(parents=True, exist_ok=True)
-LOG_FILE = ART / "run.log"
 
 TEST_START = date(2025, 10, 1)
 TEST_END = date(2025, 10, 10)
 
-_log_lines: list[str] = []
-
-
-def log(msg: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {msg}" if msg else ""
-    _log_lines.append(line)
-    # Append-flush сразу — чтобы видеть прогресс в реальном времени
-    LOG_FILE.write_text("\n".join(_log_lines), encoding="utf-8")
-
-
-def flush_log() -> None:
-    LOG_FILE.write_text("\n".join(_log_lines), encoding="utf-8")
+log = Logger(ART / "run.log")
 
 
 def step_orders() -> None:
     """Через DuckDB: dedup + parse dates + split. Polars streaming OOMит на 39M×15 unique()."""
     import duckdb
 
-    log("=" * 60)
-    log("STEP 1/4: orders (via DuckDB)")
+    log.step("STEP 1/4: orders (via DuckDB)")
     src = DATA / "orders.csv"
     out_train = CLEAN / "orders_train.parquet"
     out_test = CLEAN / "orders_test.parquet"
@@ -132,8 +120,7 @@ def step_orders() -> None:
 
 
 def step_payments() -> None:
-    log("=" * 60)
-    log("STEP 2/4: payments")
+    log.step("STEP 2/4: payments")
     src = DATA / "payments.csv"
     out_full = CLEAN / "payments.parquet"
     out_agg = CLEAN / "payments_agg.parquet"
@@ -178,8 +165,7 @@ def step_payments() -> None:
 
 
 def step_items() -> None:
-    log("=" * 60)
-    log("STEP 3/4: items")
+    log.step("STEP 3/4: items")
     src = DATA / "items.csv"
     out = CLEAN / "items.parquet"
 
@@ -205,8 +191,7 @@ def step_items() -> None:
 
 
 def step_users() -> None:
-    log("=" * 60)
-    log("STEP 4/4: users")
+    log.step("STEP 4/4: users")
     src = DATA / "users.csv"
     out = CLEAN / "users.parquet"
 
@@ -234,22 +219,13 @@ def step_users() -> None:
 
 
 def main() -> None:
-    t0 = time.time()
     log(f"Preprocess start. polars={pl.__version__}")
     log(f"Output: {CLEAN}")
-    try:
-        step_orders()
-        step_payments()
-        step_items()
-        step_users()
-        log("=" * 60)
-        log(f"DONE in {time.time() - t0:.1f}s")
-    except Exception as exc:
-        log(f"FAILED: {type(exc).__name__}: {exc}")
-        flush_log()
-        raise
-    finally:
-        flush_log()
+    step_orders()
+    step_payments()
+    step_items()
+    step_users()
+    log.done()
 
 
 if __name__ == "__main__":
@@ -257,10 +233,5 @@ if __name__ == "__main__":
     try:
         main()
     except BaseException as exc:  # noqa: BLE001
-        import traceback
-        crash = ART / "crash.log"
-        crash.write_text(
-            f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}",
-            encoding="utf-8",
-        )
+        log.crash(exc, ART / "crash.log")
         sys.exit(1)

@@ -11,7 +11,6 @@ Test:    c4_test.parquet (4.03M строк, 10-01..10-10)
 Артефакты в artifacts/catboost_22/.
 """
 from __future__ import annotations
-import time
 from pathlib import Path
 
 import numpy as np
@@ -23,11 +22,12 @@ from sklearn.metrics import (
     precision_score, recall_score,
 )
 
+from _log import Logger
+
 ROOT = Path(__file__).resolve().parent.parent
 FEAT = ROOT / "data" / "features"
 ART = ROOT / "artifacts" / "catboost_22"
 ART.mkdir(parents=True, exist_ok=True)
-LOG_FILE = ART / "run.log"
 
 CAT_COLS = [
     "delivery_service", "platform_id", "city", "category_name",
@@ -53,11 +53,7 @@ TRAIN_PATH = FEAT / "c4_train_22.parquet"
 HOLDOUT_PATH = FEAT / "c4_holdout_full.parquet"
 TEST_PATH = FEAT / "c4_test.parquet"
 
-_lines: list[str] = []
-def log(m: str = "") -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {m}" if m else ""
-    _lines.append(line)
-    LOG_FILE.write_text("\n".join(_lines), encoding="utf-8")
+log = Logger(ART / "run.log")
 
 
 def load_pandas(path: Path, name: str) -> pd.DataFrame:
@@ -86,15 +82,13 @@ def load_pandas(path: Path, name: str) -> pd.DataFrame:
 
 
 def main() -> None:
-    t0 = time.time()
     import catboost
     log(f"CatBoost on 22% sample. catboost={catboost.__version__}, polars={pl.__version__}")
     log(f"  train: {TRAIN_PATH}")
     log(f"  holdout (full): {HOLDOUT_PATH}")
     log(f"  test: {TEST_PATH}")
 
-    log("=" * 60)
-    log("Step 1/5: load")
+    log.step("Step 1/5: load")
     train = load_pandas(TRAIN_PATH, "train")
     holdout = load_pandas(HOLDOUT_PATH, "holdout")
     test = load_pandas(TEST_PATH, "test")
@@ -105,8 +99,7 @@ def main() -> None:
     X_hold, y_hold = holdout[feature_cols], holdout[TARGET].astype(np.int8).values
     X_test = test[feature_cols]
 
-    log("=" * 60)
-    log("Step 2/5: fit CatBoost")
+    log.step("Step 2/5: fit CatBoost")
     log(f"  params: {PARAMS}")
     model = CatBoostClassifier(**PARAMS, cat_features=CAT_COLS)
     model.fit(
@@ -118,8 +111,7 @@ def main() -> None:
     log(f"  best_iteration: {best_iter}")
     log(f"  best score: {model.get_best_score()}")
 
-    log("=" * 60)
-    log("Step 3/5: holdout metrics")
+    log.step("Step 3/5: holdout metrics")
     p_hold = model.predict_proba(X_hold)[:, 1]
     auc = roc_auc_score(y_hold, p_hold)
     precs, recs, thrs = precision_recall_curve(y_hold, p_hold)
@@ -148,8 +140,7 @@ def main() -> None:
     for _, r in imp.head(20).iterrows():
         log(f"    {r['feature']:35s} importance={r['importance']:.4f}")
 
-    log("=" * 60)
-    log("Step 4/5: test predictions")
+    log.step("Step 4/5: test predictions")
     p_test = model.predict_proba(X_test)[:, 1]
     pred_test = (p_test >= bthr).astype(np.int8)
     log(f"  test prob: min={p_test.min():.4f}, max={p_test.max():.4f}, mean={p_test.mean():.4f}")
@@ -175,8 +166,7 @@ def main() -> None:
     out_pred.write_parquet(ART / "predictions.parquet", compression="zstd")
     log(f"  → {ART / 'predictions.parquet'}")
 
-    log("=" * 60)
-    log("Step 5/5: save model & metrics")
+    log.step("Step 5/5: save model & metrics")
     model.save_model(str(ART / "catboost.cbm"))
 
     metrics_txt = (
@@ -193,8 +183,7 @@ def main() -> None:
     (ART / "metrics.txt").write_text(metrics_txt, encoding="utf-8")
     log(f"  → {ART / 'metrics.txt'}")
 
-    log("=" * 60)
-    log(f"DONE in {time.time()-t0:.1f}s")
+    log.done()
 
 
 if __name__ == "__main__":
@@ -203,7 +192,5 @@ if __name__ == "__main__":
     try:
         main()
     except BaseException as exc:
-        import traceback
-        crash = ART / "crash.log"
-        crash.write_text(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}", encoding="utf-8")
+        log.crash(exc, ART / "crash.log")
         raise
